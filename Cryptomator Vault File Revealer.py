@@ -37,6 +37,8 @@ from win32com.shell import shell, shellcon
 import os
 import wx
 import subprocess
+import pathlib
+from contextlib import contextmanager
 
 
 def GetDocumentsPath():
@@ -56,29 +58,26 @@ def BrowseFolder(defaultPath, prompt):
 def BrowseFile(defaultPath, prompt):
   browseDlg = wx.FileDialog(None, prompt, defaultDir=defaultPath, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
   if browseDlg.ShowModal() == wx.ID_OK:
-    result = browseDlg.GetPath()
+    result = pathlib.Path(browseDlg.GetPath())
   else:
     result = None
   browseDlg.Destroy()
   return result
 
 
-def GetFilePathsInFolder(folderPath):
-  filePaths = set()
-  for rootFolderPath, folderNames, fileNames in os.walk(folderPath):
-    for fileName in fileNames:
-      filePaths.add(os.path.join(rootFolderPath, fileName))
-  return filePaths
+def GetFilesInFolder(folderPath):
+  return [file for file in pathlib.Path(folderPath).rglob('*') if file.is_file()]
 
 
-def DisableFile(realFilePath):
-  tempFilePath = realFilePath + '.cvfr-sidestepped'
-  os.rename(realFilePath, tempFilePath)
-  return tempFilePath
-
-
-def EnableFile(tempFilePath, realFilePath):
-  os.rename(tempFilePath, realFilePath)
+@contextmanager
+def DisableFile(file):
+  tempFile = file.with_name(file.name + '.cvfr-sidestepped')
+  try:
+    file.rename(tempFile)
+    yield
+  finally:
+    if tempFile.exists():
+      tempFile.rename(file)
 
 
 def TellFileNotFound(isEncryptedFile):
@@ -87,11 +86,11 @@ def TellFileNotFound(isEncryptedFile):
   dlg.Destroy()
 
 
-def TellFileFound(filePath, isEncryptedFile):
-  dlg = wx.MessageDialog(None, 'The corresponding ' + ('encrypted' if isEncryptedFile else 'decrypted') + ' file is:\n' + filePath + '\n\nDo you want to reveal this file in Explorer?', 'File found', wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION)
+def TellFileFound(file, isEncryptedFile):
+  dlg = wx.MessageDialog(None, 'The corresponding ' + ('encrypted' if isEncryptedFile else 'decrypted') + ' file is:\n' + str(file) + '\n\nDo you want to reveal this file in Explorer?', 'File found', wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION)
   if dlg.ShowModal() == wx.ID_YES:
-    explorerPath = os.path.join(os.getenv('WINDIR'), 'explorer.exe')
-    subprocess.run([explorerPath, '/select,', filePath])
+    explorerPath = pathlib.Path(os.getenv('WINDIR'), 'explorer.exe')
+    subprocess.run([str(explorerPath), '/select,', str(file)])
   dlg.Destroy()
 
 
@@ -112,41 +111,35 @@ def AskFileType():
   return (okClicked, decToEncrypted)
 
 
-def FindMissingFile(filePaths):
-  for filePath in filePaths:
-    if not os.path.isfile(filePath):
-      return filePath
+def FindMissingFile(files):
+  for file in files:
+    if not file.exists():
+      return file
   return None
 
 
-def RevealEncryptedFile(encryptedFilePaths, decryptedFilePath):
-  encryptedFilePath = None
+def RevealEncryptedFile(encryptedFiles, decryptedFile):
+  encryptedFile = None
 
-  tempFilePath = DisableFile(decryptedFilePath)
-  try:
-    encryptedFilePath = FindMissingFile(encryptedFilePaths)
-  finally:
-    EnableFile(tempFilePath, decryptedFilePath)
+  with DisableFile(decryptedFile):
+    encryptedFile = FindMissingFile(encryptedFiles)
 
-  if encryptedFilePath is None:
+  if encryptedFile is None:
     TellFileNotFound(True)
   else:
-    TellFileFound(encryptedFilePath, True)
+    TellFileFound(encryptedFile, True)
 
 
-def RevealDecryptedFile(decryptedFilePaths, encryptedFilePath):
-  decryptedFilePath = None
+def RevealDecryptedFile(decryptedFiles, encryptedFile):
+  decryptedFile = None
 
-  tempFilePath = DisableFile(encryptedFilePath)
-  try:
-    decryptedFilePath = FindMissingFile(decryptedFilePaths)
-  finally:
-    EnableFile(tempFilePath, encryptedFilePath)
+  with DisableFile(encryptedFile):
+    decryptedFile = FindMissingFile(decryptedFiles)
 
-  if decryptedFilePath is None:
+  if decryptedFile is None:
     TellFileNotFound(False)
   else:
-    TellFileFound(decryptedFilePath, False)
+    TellFileFound(decryptedFile, False)
 
 
 class MyApp(wx.App):
@@ -156,12 +149,12 @@ class MyApp(wx.App):
     encryptedFolderPath = BrowseFolder(documentsPath, 'Browse to the locked Cryptomator vault folder')
     if encryptedFolderPath is None:
       return True
-    encryptedFilePaths = GetFilePathsInFolder(encryptedFolderPath)
+    encryptedFiles = GetFilesInFolder(encryptedFolderPath)
 
     decryptedFolderPath = BrowseFolder(documentsPath, 'Unlock the vault in Cryptomator and browse to the unlocked folder')
     if decryptedFolderPath is None:
       return True
-    decryptedFilePaths = GetFilePathsInFolder(decryptedFolderPath)
+    decryptedFiles = GetFilesInFolder(decryptedFolderPath)
 
     while True:
       (okClicked, decToEncrypted) = AskFileType()
@@ -169,15 +162,15 @@ class MyApp(wx.App):
         return True
 
       if decToEncrypted:
-        decryptedFilePath = BrowseFile(decryptedFolderPath, 'Select the decrypted file in the unlocked vault folder')
-        if decryptedFilePath is None:
+        decryptedFile = BrowseFile(decryptedFolderPath, 'Select the decrypted file in the unlocked vault folder')
+        if decryptedFile is None:
           return True
-        RevealEncryptedFile(encryptedFilePaths, decryptedFilePath)
+        RevealEncryptedFile(encryptedFiles, decryptedFile)
       else:
-        encryptedFilePath = BrowseFile(encryptedFolderPath, 'Select the encrypted file in the locked vault folder')
-        if encryptedFilePath is None:
+        encryptedFile = BrowseFile(encryptedFolderPath, 'Select the encrypted file in the locked vault folder')
+        if encryptedFile is None:
           return True
-        RevealDecryptedFile(decryptedFilePaths, encryptedFilePath)
+        RevealDecryptedFile(decryptedFiles, encryptedFile)
 
       if not AskFindOtherFile():
         return True
