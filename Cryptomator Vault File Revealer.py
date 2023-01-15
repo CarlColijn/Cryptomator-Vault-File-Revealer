@@ -1,4 +1,4 @@
-# Cryptomator Vault File Revealer, v2013-01-15
+# Cryptomator Vault File Revealer, v2013-01-16
 #
 # Reveals the decrypted file which corresponds with an encrypted file
 # in a locked Cryptomator vault, or the reverse.
@@ -197,8 +197,8 @@ class MainWindow(tk.Tk):
     tk.Label(mainFrame, text='Reveal one or more files', font=bigFont).pack(side=tk.TOP, pady=(20,0), anchor='w')
     actionFrame = tk.Frame(mainFrame)
     actionFrame.pack(side=tk.TOP, fill=tk.BOTH)
-    tk.Button(actionFrame, text='Select file in vault,\nreveal file in unlocked folder', command=lambda: self.EnsureFilesScanned(self.OnRevealDecryptedFile)).pack(side=tk.LEFT, ipadx=7, ipady=3)
-    tk.Button(actionFrame, text='Select file in unlocked folder,\nreveal file in vault', command=lambda: self.EnsureFilesScanned(self.OnRevealEncryptedFile)).pack(side=tk.RIGHT, padx=(10,0), ipadx=7, ipady=3)
+    tk.Button(actionFrame, text='Select file in vault,\nreveal file in unlocked folder', command=lambda: self.EnsureFilesScanned(self.decryptedFileSet, self.OnRevealDecryptedFile)).pack(side=tk.LEFT, ipadx=7, ipady=3)
+    tk.Button(actionFrame, text='Select file in unlocked folder,\nreveal file in vault', command=lambda: self.EnsureFilesScanned(self.encryptedFileSet, self.OnRevealEncryptedFile)).pack(side=tk.RIGHT, padx=(10,0), ipadx=7, ipady=3)
     self.progressLog = ProgressLog(mainFrame, state=tk.DISABLED, height=7)
     self.progressLog.pack(side=tk.TOP, expand=True, fill=tk.BOTH, pady=(10,0))
 
@@ -297,7 +297,9 @@ class MainWindow(tk.Tk):
     self.destroy()
 
 
-  def EnsureFileSetScanned(self, fileSet, OnScanDone):
+  def EnsureFilesScanned(self, fileSet, OnScanDone):
+    self.progressLog.Reset()
+
     if not fileSet.files is None:
       self.progressLog.Log(f'Scanning {fileSet.folderType}... already scanned.')
       self.progressLog.NextLine()
@@ -308,11 +310,6 @@ class MainWindow(tk.Tk):
       self.MonitorThread(OnScanDone)
     else:
       tk.messagebox.showerror('Folder not found', f'I cannot find the specified {fileSet.folderType} folder!  Please ensure you entered the correct path, or browse to it to be sure.')
-
-
-  def EnsureFilesScanned(self, OnScanDone):
-    self.progressLog.Reset()
-    self.EnsureFileSetScanned(self.encryptedFileSet, lambda: self.EnsureFileSetScanned(self.decryptedFileSet, OnScanDone))
 
 
   def MonitorThread(self, OnScanDone):
