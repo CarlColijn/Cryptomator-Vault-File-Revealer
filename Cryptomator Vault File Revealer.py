@@ -1,4 +1,4 @@
-# Cryptomator Vault File Revealer, v2013-01-16
+# Cryptomator Vault File Revealer, v2013-01-18
 #
 # Reveals the decrypted file which corresponds with an encrypted file
 # in a locked Cryptomator vault, or the reverse.
@@ -48,76 +48,126 @@ from contextlib import contextmanager
 
 
 
-class FileSet:
-  def __init__(self, folderType, fileType, browseFolderTitle, browseFileTitle):
-    self.folderPath = ''
+class FolderOptions:
+  def __init__(self, defaultPath, type, browseTitle, OnSelectionChange):
     self.files = None
+    self.foundFile = None
 
-    self.folderType = folderType
-    self.fileType = fileType
-    self.browseFolderTitle = browseFolderTitle
-    self.browseFileTitle = browseFileTitle
+    self.OnSelectionChange = OnSelectionChange
+
+    self.path = ''
+    self.defaultPath = defaultPath
+
+    self.type = type
+    self.browseTitle = browseTitle
 
     self.editText = tk.StringVar()
+    self.editText.trace('w', lambda *args: self.OnChange())
+
+
+  def OnBrowse(self, parent):
+    oldPath = self.editText.get()
+    if len(oldPath) == 0:
+      oldPath = self.defaultPath
+
+    newPath = tk.filedialog.askdirectory(parent=parent, title=self.browseTitle, initialdir=oldPath)
+    if len(newPath) > 0:
+      self.editText.set(os.path.normpath(newPath))
+
+
+  def OnChange(self):
+    self.path = self.editText.get()
+    self.files = None
+    self.OnSelectionChange()
+
+
+
+
+class FileOptions:
+  def __init__(self, defaultPath, type, browseTitle, OnSelectionChange):
+    self.OnSelectionChange = OnSelectionChange
+
+    self.path = ''
+    self.defaultPath = defaultPath
+
+    self.type = type
+    self.browseTitle = browseTitle
+
+    self.editText = tk.StringVar()
+    self.editText.trace('w', lambda *args: self.OnChange())
+
+
+  def OnBrowse(self, parent):
+    oldPath = self.editText.get()
+    if len(oldPath) == 0:
+      oldPath = self.defaultPath
+
+    newPath = tk.filedialog.askopenfilename(parent=parent, title=self.browseTitle, initialdir=os.path.dirname(oldPath), initialfile=os.path.basename(oldPath))
+    if len(newPath) > 0:
+      self.editText.set(os.path.normpath(newPath))
+
+
+  def OnChange(self):
+    self.path = self.editText.get()
+    self.OnSelectionChange()
 
 
 
 
 class FolderScanThread(threading.Thread):
-  def __init__(self, fileSet):
+  def __init__(self, folderOptions):
     super().__init__()
 
-    self.fileSet = fileSet
+    self.options = folderOptions
 
     self.mustStop = False
     self.progress = 0
-    self.description = f'Scanning {fileSet.folderType}'
+    self.description = f'Scanning {folderOptions.type} folder'
 
 
   def run(self):
-    self.fileSet.files = []
+    self.options.files = []
 
-    for file in pathlib.Path(self.fileSet.folderPath).rglob('*'):
+    for file in pathlib.Path(self.options.path).rglob('*'):
       if self.mustStop:
         break
 
       self.progress += 1
 
       if file.is_file():
-        self.fileSet.files.append(file)
+        self.options.files.append(file)
 
 
 
 
 class FileFindThread(threading.Thread):
-  def __init__(self, disableFilePath, selectFromFileSet, findInFileSet):
+  def __init__(self, fromFileOptions, toFolderOptions):
     super().__init__()
 
-    self.disableFilePath = disableFilePath
-    self.selectFromFileSet = selectFromFileSet
-    self.findInFileSet = findInFileSet
-    self.foundFile = None
+    self.fromFileOptions = fromFileOptions
+    self.toFolderOptions = toFolderOptions
+    self.toFolderOptions.foundFile = None
 
     self.mustStop = False
     self.progress = 0
-    self.description = f'Finding {findInFileSet.fileType}'
+    self.description = f'Finding {toFolderOptions.type} file'
 
 
   def run(self):
-    with self.DisableFile():
-      for file in self.findInFileSet.files:
+    with self.DisabledFile():
+      for file in self.toFolderOptions.files:
         if self.mustStop:
           break
 
         self.progress = self.progress + 1
         if not file.exists():
-          self.foundFile = file
+          self.toFolderOptions.foundFile = file
           break
 
 
   @contextmanager
-  def DisableFile(self):
-    file = pathlib.Path(self.disableFilePath)
+  def DisabledFile(self):
+    file = pathlib.Path(self.fromFileOptions.path)
     tempFile = file.with_name(file.name + '.cvfr-sidestepped')
     try:
       file.rename(tempFile)
@@ -163,7 +213,14 @@ class MainWindow(tk.Tk):
   def __init__(self):
     super().__init__()
 
-    self.myDocumentsPath = self.GetDocumentsPath()
+    myDocumentsPath = self.GetDocumentsPath()
+    self.encryptedFolderOptions = FolderOptions(myDocumentsPath, 'vault', 'Browse to the Cryptomator vault', lambda: self.OnSelectionChange())
+    self.encryptedFileOptions = FileOptions(myDocumentsPath, 'vault', 'Select the encrypted file in the Cryptomator vault', lambda: self.OnSelectionChange())
+    self.decryptedFolderOptions = FolderOptions(myDocumentsPath, 'unlocked', 'Browse to the unlocked folder', lambda: self.OnSelectionChange())
+    self.decryptedFileOptions = FileOptions(myDocumentsPath, 'unlocked', 'Select the decrypted file in the unlocked folder', lambda: self.OnSelectionChange())
+
+    self.fromFileOptions = self.encryptedFileOptions
+    self.toFolderOptions = self.decryptedFolderOptions
     self.scanThread = None
 
     self.SetupGUI()
@@ -184,25 +241,43 @@ class MainWindow(tk.Tk):
 
     tk.Label(mainFrame, text='Don\'t forget to unlock the vault in Cryptomator!', font=bigFont, anchor='w').pack(side=tk.TOP, anchor='w')
 
-    tk.Label(mainFrame, text='Path of the Cryptomator vault:', anchor='w').pack(side=tk.TOP, pady=(20,0), anchor='w')
+    tk.Label(mainFrame, text='Choose:', anchor='w').pack(side=tk.TOP, pady=(20,0), anchor='w')
 
-    self.encryptedFileSet = FileSet('vault folder', 'vault file', 'Browse to the Cryptomator vault', 'Select the encrypted file in the Cryptomator vault')
-    self.AddBrowseSection(mainFrame, self.encryptedFileSet)
-
-    tk.Label(mainFrame, text='Path of the unlocked folder:', anchor='w').pack(side=tk.TOP, anchor='w')
-
-    self.decryptedFileSet = FileSet('unlocked folder', 'unlocked file', 'Browse to the unlocked folder', 'Select the decrypted file in the unlocked folder')
-    self.AddBrowseSection(mainFrame, self.decryptedFileSet)
-
-    tk.Label(mainFrame, text='Reveal one or more files', font=bigFont).pack(side=tk.TOP, pady=(20,0), anchor='w')
     actionFrame = tk.Frame(mainFrame)
     actionFrame.pack(side=tk.TOP, fill=tk.BOTH)
-    tk.Button(actionFrame, text='Select file in vault,\nreveal file in unlocked folder', command=lambda: self.EnsureFilesScanned(self.decryptedFileSet, self.OnRevealDecryptedFile)).pack(side=tk.LEFT, ipadx=7, ipady=3)
-    tk.Button(actionFrame, text='Select file in unlocked folder,\nreveal file in vault', command=lambda: self.EnsureFilesScanned(self.encryptedFileSet, self.OnRevealEncryptedFile)).pack(side=tk.RIGHT, padx=(10,0), ipadx=7, ipady=3)
-    self.progressLog = ProgressLog(mainFrame, state=tk.DISABLED, height=7)
-    self.progressLog.pack(side=tk.TOP, expand=True, fill=tk.BOTH, pady=(10,0))
+    self.mode = tk.IntVar(None, 1)
+    tk.Radiobutton(actionFrame, text='Select file in vault,\nfind file in unlocked folder', value=1, variable=self.mode, command=self.OnEncryptedToDecrypted, indicator=0).pack(side=tk.LEFT, ipadx=7, ipady=3)
+    tk.Radiobutton(actionFrame, text='Select file in unlocked folder,\nfind file in vault', value=2, variable=self.mode, command=self.OnDecryptedToEncrypted, indicator=0).pack(side=tk.LEFT, ipadx=7, ipady=3)
 
-    tk.Button(mainFrame, text='Exit', command=self.OnExit).pack(side=tk.RIGHT, anchor='w', pady=(20,0), ipadx=15, ipady=3)
+    browseFrame = tk.Frame(mainFrame)
+    browseFrame.pack(side=tk.TOP, pady=(30,0), fill=tk.BOTH)
+    self.encToDecFrame = tk.Frame(browseFrame)
+    self.encToDecFrame.pack(side=tk.TOP, fill=tk.BOTH)
+    tk.Label(self.encToDecFrame, text='Path of the file in the Cryptomator vault:', anchor='w').pack(side=tk.TOP, anchor='w')
+    self.AddBrowseSection(self.encToDecFrame, self.encryptedFileOptions)
+    tk.Label(self.encToDecFrame, text='Path of the unlocked folder:', anchor='w').pack(side=tk.TOP, anchor='w')
+    self.AddBrowseSection(self.encToDecFrame, self.decryptedFolderOptions)
+
+    self.decToEncFrame = tk.Frame(browseFrame)
+    self.decToEncFrame.pack(side=tk.TOP, fill=tk.BOTH)
+    tk.Label(self.decToEncFrame, text='Path of the file in the unlocked folder:', anchor='w').pack(side=tk.TOP, anchor='w')
+    self.AddBrowseSection(self.decToEncFrame, self.decryptedFileOptions)
+    tk.Label(self.decToEncFrame, text='Path of the Cryptomator vault:', anchor='w').pack(side=tk.TOP, anchor='w')
+    self.AddBrowseSection(self.decToEncFrame, self.encryptedFolderOptions)
+    self.decToEncFrame.pack_forget()
+
+    self.findButton = tk.Button(mainFrame, text='Find file', state=tk.DISABLED, width=10, command=self.OnFindFile)
+    self.findButton.pack(side=tk.TOP, pady=(10,0), ipadx=7, ipady=3, anchor='w')
+
+    tk.Label(mainFrame, text='Result:', anchor='w').pack(side=tk.TOP, pady=(30,0), anchor='w')
+    self.progressLog = ProgressLog(mainFrame, state=tk.DISABLED, height=6)
+    self.progressLog.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
+
+    self.revealButton = tk.Button(mainFrame, text='Reveal file', state=tk.DISABLED, width=10, command=self.OnRevealFile)
+    self.revealButton.pack(side=tk.LEFT, anchor='w', ipadx=7, ipady=3)
+
+    self.exitButton = tk.Button(mainFrame, text='Exit', width=7, command=self.OnExit)
+    self.exitButton.pack(side=tk.RIGHT, anchor='e', pady=(30,0), ipadx=15, ipady=3)
 
     self.bind('<Destroy>', self.OnShuttingDown)
 
@@ -225,16 +300,31 @@ class MainWindow(tk.Tk):
     return shell.SHGetFolderPath(0, shellcon.CSIDL_PERSONAL, None, 0)
 
 
-  def AddBrowseSection(self, mainFrame, fileSet):
+  def AddBrowseSection(self, mainFrame, options):
     browseFrame = tk.Frame(mainFrame)
     browseFrame.pack(side=tk.TOP, fill=tk.BOTH)
 
-    fileSet.editText.trace('w', lambda *args: self.OnBrowseEntryChanged(fileSet))
-    editBox = tk.Entry(browseFrame, textvariable=fileSet.editText)
+    editBox = tk.Entry(browseFrame, textvariable=options.editText)
     editBox.pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-    browseButton = tk.Button(browseFrame, text='Browse...', command=lambda: self.OnBrowseFolder(fileSet))
+    browseButton = tk.Button(browseFrame, text='Browse...', command=lambda: options.OnBrowse(self))
     browseButton.pack(side=tk.RIGHT, padx=(10,0), ipadx=5, ipady=1)
+
+
+  def OnEncryptedToDecrypted(self):
+    self.encToDecFrame.pack(fill=tk.BOTH)
+    self.decToEncFrame.pack_forget()
+
+    self.fromFileOptions = self.encryptedFileOptions
+    self.toFolderOptions = self.decryptedFolderOptions
+
+
+  def OnDecryptedToEncrypted(self):
+    self.decToEncFrame.pack(fill=tk.BOTH)
+    self.encToDecFrame.pack_forget()
+
+    self.fromFileOptions = self.decryptedFileOptions
+    self.toFolderOptions = self.encryptedFolderOptions
 
 
   def OnShuttingDown(self, *args):
@@ -242,74 +332,52 @@ class MainWindow(tk.Tk):
       self.scanThread.mustStop = True
 
 
-  def OnBrowseEntryChanged(self, fileSet):
-    newFolderPath = fileSet.editText.get()
-    fileSet.folderPath = newFolderPath
-    fileSet.files = None
+  def OnFindFile(self):
+    if self.AllPathsExists():
+      self.progressLog.Reset()
+      self.revealButton['state'] = 'disable'
+      self.toFolderOptions.foundFile = None
+
+      if not self.toFolderOptions.files is None:
+        self.progressLog.Log(f'Scanning {self.toFolderOptions.type}... already scanned.')
+        self.progressLog.NextLine()
+        self.FindMissingFile()
+      else:
+        self.scanThread = FolderScanThread(self.toFolderOptions)
+        self.scanThread.start()
+        self.MonitorThread(lambda: self.FindMissingFile())
 
 
-  def OnBrowseFolder(self, fileSet):
-    oldFolderPath = fileSet.editText.get()
-    if len(oldFolderPath) == 0:
-      oldFolderPath = self.myDocumentsPath
-
-    newFolderPath = tk.filedialog.askdirectory(parent=self, title=fileSet.browseFolderTitle, initialdir=oldFolderPath)
-    newFolderPath = os.path.normpath(newFolderPath)
-
-    if len(newFolderPath) > 0:
-      fileSet.editText.set(newFolderPath)
-
-
-  def FindMissingFile(self, selectedFilePath, selectFromFileSet, findInFileSet):
-    self.scanThread = FileFindThread(selectedFilePath, selectFromFileSet, findInFileSet)
-    self.scanThread.start()
-    self.MonitorThread(self.OnFileScanDone)
-
-
-  def OnFileScanDone(self):
-    self.progressLog.Log(f'Selected {self.scanThread.selectFromFileSet.fileType}: {self.scanThread.disableFilePath}')
-    self.progressLog.NextLine()
-
-    foundFile = self.scanThread.foundFile
-    if foundFile is None:
-      self.progressLog.Log(f'Found {self.scanThread.findInFileSet.fileType}: sorry, file not found.')
-      self.TellFileNotFound(self.scanThread.findInFileSet.fileType)
-    else:
-      self.progressLog.Log(f'Found {self.scanThread.findInFileSet.fileType}: {foundFile}')
-      self.TellFileFound(foundFile, self.scanThread.findInFileSet.fileType)
-
-
-  def RevealFile(self, selectFromFileSet, findInFileSet):
-    selectedFilePath = self.BrowseFile(selectFromFileSet.folderPath, selectFromFileSet.browseFileTitle)
-    if len(selectedFilePath) > 0:
-      self.FindMissingFile(selectedFilePath, selectFromFileSet, findInFileSet)
-
-
-  def OnRevealDecryptedFile(self):
-    self.RevealFile(self.encryptedFileSet, self.decryptedFileSet)
-
-
-  def OnRevealEncryptedFile(self):
-    self.RevealFile(self.decryptedFileSet, self.encryptedFileSet)
+  def OnRevealFile(self):
+    self.RevealFile(self.toFolderOptions.foundFile)
 
 
   def OnExit(self):
     self.destroy()
 
 
-  def EnsureFilesScanned(self, fileSet, OnScanDone):
-    self.progressLog.Reset()
+  def OnSelectionChange(self):
+    self.findButton['state'] = 'normal' if self.AllPathsEntered() else 'disable'
 
-    if not fileSet.files is None:
-      self.progressLog.Log(f'Scanning {fileSet.folderType}... already scanned.')
-      self.progressLog.NextLine()
-      OnScanDone()
-    elif os.path.exists(fileSet.folderPath):
-      self.scanThread = FolderScanThread(fileSet)
-      self.scanThread.start()
-      self.MonitorThread(OnScanDone)
+
+  def FindMissingFile(self):
+    self.scanThread = FileFindThread(self.fromFileOptions, self.toFolderOptions)
+    self.scanThread.start()
+    self.MonitorThread(self.OnFileScanDone)
+
+
+  def OnFileScanDone(self):
+    self.progressLog.Log(f'Selected {self.fromFileOptions.type} file: {self.fromFileOptions.path}')
+    self.progressLog.NextLine()
+
+    foundFile = self.toFolderOptions.foundFile
+    if foundFile is None:
+      self.progressLog.Log(f'Found {self.toFolderOptions.type} file: sorry, file not found.')
+      self.TellFileNotFound(self.toFolderOptions.type)
     else:
-      tk.messagebox.showerror('Folder not found', f'I cannot find the specified {fileSet.folderType} folder!  Please ensure you entered the correct path, or browse to it to be sure.')
+      self.revealButton['state'] = 'normal'
+      self.progressLog.Log(f'Found {self.toFolderOptions.type} file: {foundFile}')
+      self.TellFileFound(foundFile, self.toFolderOptions.type)
 
 
   def MonitorThread(self, OnScanDone):
@@ -322,20 +390,35 @@ class MainWindow(tk.Tk):
       OnScanDone()
 
 
-  def BrowseFile(self, defaultPath, prompt):
-    newFilePath = tk.filedialog.askopenfilename(parent=self, title=prompt, initialdir=defaultPath)
-    return os.path.normpath(newFilePath)
+  def AllPathsEntered(self):
+    return len(self.fromFileOptions.path) > 0 and len(self.toFolderOptions.path) > 0
+
+
+  def AllPathsExists(self):
+    selectionOK = False
+    if not os.path.exists(self.fromFileOptions.path):
+      tk.messagebox.showinfo('Invalid file selected', f'The {self.fromFileOptions.type} file you selected doesn\'t exist.')
+    elif not os.path.exists(self.toFolderOptions.path):
+      tk.messagebox.showinfo('Invalid folder selected', f'The {self.toFolderOptions.type} folder you selected doesn\'t exist.')
+    else:
+      selectionOK = True
+
+    return selectionOK
 
 
   def TellFileNotFound(self, fileType):
-    tk.messagebox.showinfo('File not found', f'I cannot find the corresponding {fileType}!  Maybe you unlocked the wrong vault?')
+    tk.messagebox.showinfo('File not found', f'I cannot find the corresponding {fileType} file!  Maybe you unlocked the wrong vault?')
 
 
   def TellFileFound(self, file, fileType):
-    userChoice = tk.messagebox.askquestion('File found', f'The corresponding {fileType} is:\n{file}\n\nDo you want to reveal this file in Explorer?')
+    userChoice = tk.messagebox.askquestion('File found', f'The corresponding {fileType} file is:\n\n{file}\n\nDo you want to reveal this file in Explorer?')
     if userChoice == 'yes':
-      explorerPath = pathlib.Path(os.getenv('WINDIR'), 'explorer.exe')
-      subprocess.run([str(explorerPath), '/select,', str(file)])
+      self.RevealFile(file)
+
+
+  def RevealFile(self, file):
+    explorerPath = pathlib.Path(os.getenv('WINDIR'), 'explorer.exe')
+    subprocess.run([str(explorerPath), '/select,', str(file)])
 
 
 
