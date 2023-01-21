@@ -266,14 +266,14 @@ class MainWindow(tk.Tk):
     self.AddBrowseSection(self.decToEncFrame, self.encryptedFolderOptions)
     self.decToEncFrame.pack_forget()
 
-    self.findButton = tk.Button(mainFrame, text='Find file', state=tk.DISABLED, width=10, command=self.OnFindFile)
+    self.findButton = tk.Button(mainFrame, text='Find unlocked file', state=tk.DISABLED, width=15, command=self.OnFindFile)
     self.findButton.pack(side=tk.TOP, pady=(10,0), ipadx=7, ipady=3, anchor='w')
 
     tk.Label(mainFrame, text='Result:', anchor='w').pack(side=tk.TOP, pady=(30,0), anchor='w')
     self.progressLog = ProgressLog(mainFrame, state=tk.DISABLED, height=6)
     self.progressLog.pack(side=tk.TOP, expand=True, fill=tk.BOTH)
 
-    self.revealButton = tk.Button(mainFrame, text='Reveal file', state=tk.DISABLED, width=10, command=self.OnRevealFile)
+    self.revealButton = tk.Button(mainFrame, text='Reveal unlocked file', state=tk.DISABLED, width=15, command=self.OnRevealFile)
     self.revealButton.pack(side=tk.LEFT, anchor='w', ipadx=7, ipady=3)
 
     self.exitButton = tk.Button(mainFrame, text='Exit', width=7, command=self.OnExit)
@@ -315,6 +315,9 @@ class MainWindow(tk.Tk):
     self.encToDecFrame.pack(fill=tk.BOTH)
     self.decToEncFrame.pack_forget()
 
+    self.findButton.config(text='Find unlocked file')
+    self.revealButton.config(text='Reveal unlocked file')
+
     self.fromFileOptions = self.encryptedFileOptions
     self.toFolderOptions = self.decryptedFolderOptions
 
@@ -322,6 +325,9 @@ class MainWindow(tk.Tk):
   def OnDecryptedToEncrypted(self):
     self.decToEncFrame.pack(fill=tk.BOTH)
     self.encToDecFrame.pack_forget()
+
+    self.findButton.config(text='Find vault file')
+    self.revealButton.config(text='Reveal vault file')
 
     self.fromFileOptions = self.decryptedFileOptions
     self.toFolderOptions = self.encryptedFolderOptions
